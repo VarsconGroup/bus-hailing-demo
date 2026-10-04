@@ -57,6 +57,16 @@ For each candidate pickup point:
 5. Assign the lowest score overall. Write the new stop list to the bus and tell the rider:
    their meetup point, the walk, the bus, the promised pickup and the fare.
 
+## Electric buses
+
+- An electric bus whose battery falls below the *go to charge* level stops taking new
+  bookings. It still finishes the pickups and drop-offs already in its plan.
+- When its plan is empty it drives to the charging hub and queues. Chargers are handed out
+  first come, first served.
+- It charges at the charger's power up to the *charge up to* level, then returns to service.
+- Dispatch does not check range per trip. The threshold (default 20% of 60 kWh, about 48 km)
+  is far more than any trip inside Phase 1.
+
 ## 3. When no bus fits
 
 The rider stays in *finding a bus* and is re-tried every 30 s until their latest pickup

@@ -7,7 +7,7 @@ import { fmtMin, Simulation } from './sim/simulation';
 import type { StreetState } from './sim/sweep';
 import { buildControls } from './ui/controls';
 import { Dashboard, escapeHtml } from './ui/dashboard';
-import { MapView, type Tool } from './ui/mapView';
+import { describe, MapView, type Tool } from './ui/mapView';
 import { SweepPanel } from './ui/sweepPanel';
 
 const data = raw as unknown as RawNetwork;
@@ -20,6 +20,7 @@ const ICON = {
   book: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1a4.5 4.5 0 0 0-4.5 4.5C3.5 9 8 15 8 15s4.5-6 4.5-9.5A4.5 4.5 0 0 0 8 1zm0 6.3a1.8 1.8 0 1 1 0-3.6 1.8 1.8 0 0 1 0 3.6z" fill="currentColor"/></svg>',
   bus: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5V11a1 1 0 0 1-1 1h-.3a1.7 1.7 0 0 1-3.4 0H6.7a1.7 1.7 0 0 1-3.4 0H3a1 1 0 0 1-1-1zM3.5 4v3.5h9V4z" fill="currentColor"/></svg>',
   close: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1 6h14v4H1z" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M3 6l4 4M7 6l4 4M11 6l4 4" stroke="currentColor" stroke-width="1.5"/><path d="M3 10v4M13 10v4" stroke="currentColor" stroke-width="1.5"/></svg>',
+  hub: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 1L3 9h4.5l-1 6L13 7H8.5z" fill="currentColor"/></svg>',
   jam: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.5 1.5h3l3.5 12h-10z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M5 9h6" stroke="currentColor" stroke-width="1.5"/><path d="M1 14.5h14" stroke="currentColor" stroke-width="1.5"/></svg>',
 };
 
@@ -29,6 +30,7 @@ const TOOLS: { id: Tool; label: string; hint: string }[] = [
   { id: 'bus', label: 'Bus streets', hint: 'Click a street to allow or ban buses on it. Blue centre line = bus street. Meetup points update.' },
   { id: 'close', label: 'Close road', hint: 'Click a street to close it (roadworks, flooding, an event). Click again to reopen.' },
   { id: 'jam', label: 'Traffic jam', hint: 'Click a street to slow it to 20% speed. Click again to clear the jam.' },
+  { id: 'hub', label: 'Charging hub', hint: 'Click where the charging hub should go. Electric buses drive there to charge; it snaps to the nearest meetup point.' },
 ];
 const SPEEDS = [1, 10, 30, 60, 180, 600];
 
@@ -67,8 +69,10 @@ app.innerHTML = `
         <details class="legend-box" id="legend">
           <summary>Key</summary>
           <div class="legend-grid">
-            <svg viewBox="0 0 26 14"><rect x="3" y="3" width="20" height="9" rx="2" fill="var(--danfo)" stroke="var(--danfo-ink)" stroke-width="1.5"/><rect x="5" y="5" width="9" height="5" fill="var(--danfo-ink)"/></svg><span>Bus with riders (dark bar = seats taken)</span>
-            <svg viewBox="0 0 26 14"><rect x="3" y="3" width="20" height="9" rx="2" fill="var(--panel)" stroke="var(--danfo-ink)" stroke-width="1.5"/></svg><span>Empty bus</span>
+            <svg viewBox="0 0 26 14"><rect x="3" y="3" width="20" height="9" rx="2" fill="var(--danfo)" stroke="var(--danfo-ink)" stroke-width="1.5"/><rect x="5" y="5" width="9" height="5" fill="var(--danfo-ink)"/></svg><span>Petrol bus with riders (dark bar = seats taken)</span>
+            <svg viewBox="0 0 26 14"><rect x="3" y="2" width="20" height="8" rx="2" fill="var(--ev)" stroke="var(--ev-ink)" stroke-width="1.5"/><rect x="3" y="11" width="14" height="3" fill="var(--ev)"/></svg><span>Electric bus (bar below = battery)</span>
+            <svg viewBox="0 0 26 14"><rect x="3" y="3" width="20" height="9" rx="2" fill="var(--panel)" stroke="var(--danfo-ink)" stroke-width="1.5"/></svg><span>Empty or charging bus</span>
+            <svg viewBox="0 0 26 14"><rect x="7" y="1" width="12" height="12" rx="3" fill="var(--ev)" stroke="var(--ev-ink)"/><path d="M14 3l-4 5h3l-1 4 4-5h-3z" fill="var(--ev-ink)"/></svg><span>Charging hub</span>
             <svg viewBox="0 0 26 14"><circle cx="13" cy="7" r="4" fill="var(--s7)" stroke="var(--panel)" stroke-width="1.5"/></svg><span>Rider walking to / waiting at meetup</span>
             <svg viewBox="0 0 26 14"><circle cx="13" cy="7" r="4" fill="var(--s8)"/></svg><span>Rider still looking for a bus</span>
             <svg viewBox="0 0 26 14"><path d="M1 7h24" stroke="var(--road-edge)" stroke-width="7"/><path d="M1 7h24" stroke="var(--road)" stroke-width="5"/><path d="M1 7h24" stroke="var(--bus-road)" stroke-width="2"/><circle cx="13" cy="7" r="3.5" fill="var(--panel)" stroke="var(--bus-road)" stroke-width="1.5"/></svg><span>Bus street with meetup point</span>
@@ -126,6 +130,9 @@ function newDay(warmup = 0) {
   computeCoverage();
   map.fit();
   hideToast();
+  const hubBtn = document.querySelector<HTMLButtonElement>('.tool[data-tool="hub"]')!;
+  hubBtn.hidden = cfg.powertrain === 'fuel';
+  if (hubBtn.hidden && map.tool === 'hub') setTool('select');
 }
 
 function onConfig(patch: Partial<SimConfig>, restart: boolean) {
@@ -208,6 +215,11 @@ map.onStreet = (tool, way) => {
   const what = tool === 'bus' ? (w.bus ? 'now a bus street' : 'no longer a bus street') : tool === 'close' ? (w.closed ? 'closed' : 'reopened') : w.jam < 1 ? 'jammed' : 'clear again';
   showToast(`${escapeHtml(w.name || 'Unnamed street')} is ${what}`, tool === 'bus' ? `${net.meetups.length} meetup points on ${net.stats().busKm.toFixed(1)} km of bus streets.` : 'Buses re-route at their next junction.');
   computeCoverage();
+};
+map.onHub = (x, y) => {
+  sim.setHub(x, y);
+  cfg = { ...cfg, hubX: x, hubY: y };
+  showToast('Charging hub moved', `Now at ${escapeHtml(describe(sim, net.x[sim.hubNode], net.y[sim.hubNode]))}. Buses already charging drive over to it.`);
 };
 map.onBook = (from, to) => {
   const r = sim.book(from, to, { manual: true });

@@ -16,6 +16,8 @@
   --danfo: #f6b80b;
   --danfo-ink: #1a1a14;
   --bus-idle: #fffdf0;
+  --ev: #1baf7a;
+  --ev-ink: #0c3b2a;
   --focus: #2a78d6;
 
   --land: #f3f4ef;
@@ -50,6 +52,8 @@
     --line: #2c332d;
     --grid: #242a25;
     --bus-idle: #d9d3b3;
+    --ev: #22c08a;
+    --ev-ink: #0c3b2a;
     --focus: #6da7ec;
     --land: #1c211d;
     --outside: #131714;
@@ -80,6 +84,8 @@
   --line: #2c332d;
   --grid: #242a25;
   --bus-idle: #d9d3b3;
+  --ev: #22c08a;
+  --ev-ink: #0c3b2a;
   --focus: #6da7ec;
   --land: #1c211d;
   --outside: #131714;
@@ -103,6 +109,9 @@
 
 * {
   box-sizing: border-box;
+}
+[hidden] {
+  display: none !important;
 }
 html,
 body {
@@ -823,6 +832,31 @@ thead th {
 }
 .muted {
   color: var(--muted);
+}
+.battery {
+  display: inline-block;
+  width: 30px;
+  height: 12px;
+  border: 1.5px solid var(--ink);
+  border-radius: 2px;
+  vertical-align: -1px;
+  position: relative;
+}
+.battery::after {
+  content: '';
+  position: absolute;
+  right: -4px;
+  top: 3px;
+  width: 2px;
+  height: 4px;
+  background: var(--ink);
+}
+.battery i {
+  position: absolute;
+  inset: 1px auto 1px 1px;
+  width: calc(var(--soc) - 2px);
+  max-width: calc(100% - 2px);
+  background: var(--ev);
 }
 .empty {
   color: var(--muted);

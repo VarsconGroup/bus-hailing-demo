@@ -4,7 +4,7 @@ import type { Place } from '../sim/demand';
 import type { RoadClass } from '../sim/network';
 import type { Bus, Rider, Simulation } from '../sim/simulation';
 
-export type Tool = 'select' | 'book' | 'bus' | 'close' | 'jam';
+export type Tool = 'select' | 'book' | 'bus' | 'close' | 'jam' | 'hub';
 export type Selection = { kind: 'bus'; id: number } | { kind: 'rider'; id: number } | null;
 
 const ROAD_W: Record<RoadClass, number> = { expressway: 16, arterial: 11, collector: 9, local: 5 };
@@ -23,6 +23,7 @@ export class MapView {
   onBook?: (from: Place, to: Place) => void;
   onStreet?: (tool: Tool, wayId: number) => void;
   onHint?: (text: string) => void;
+  onHub?: (x: number, y: number) => void;
 
   // camera: screen = (world - c) * scale + size/2
   private cx = 0;
@@ -54,7 +55,7 @@ export class MapView {
 
   readColors() {
     const css = getComputedStyle(this.host);
-    for (const k of ['--land', '--outside', '--water', '--road', '--road-edge', '--road-local', '--bus-road', '--meetup', '--ink', '--muted', '--panel', '--danfo', '--danfo-ink', '--s1', '--s2', '--s3', '--s7', '--s8', '--context', '--zone', '--font-data', '--font-label'])
+    for (const k of ['--land', '--outside', '--water', '--road', '--road-edge', '--road-local', '--bus-road', '--meetup', '--ink', '--muted', '--panel', '--danfo', '--danfo-ink', '--ev', '--ev-ink', '--bus-idle', '--s1', '--s2', '--s3', '--s4', '--s7', '--s8', '--context', '--zone', '--font-data', '--font-label'])
       this.colors[k] = css.getPropertyValue(k).trim();
   }
 
@@ -195,6 +196,10 @@ export class MapView {
         this.bookStart = null;
         this.onBook?.(from, { ...p, kind: nearGate(this.sim, x, y) ? 'gate' : 'home' });
       }
+      return;
+    }
+    if (this.tool === 'hub') {
+      this.onHub?.(x, y);
       return;
     }
     if (this.streetTool()) {
@@ -408,6 +413,33 @@ export class MapView {
       }
     }
 
+    // charging hub
+    if (sim.buses.some((b) => b.ev) && sim.hubNode >= 0) {
+      const X = this.sx(net.x[sim.hubNode]);
+      const Y = this.sy(net.y[sim.hubNode]);
+      ctx.beginPath();
+      ctx.roundRect(X - 10, Y - 10, 20, 20, 4);
+      ctx.fillStyle = C['--ev'];
+      ctx.fill();
+      ctx.strokeStyle = C['--ev-ink'];
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.beginPath(); // lightning bolt
+      ctx.moveTo(X + 2, Y - 7);
+      ctx.lineTo(X - 4, Y + 1);
+      ctx.lineTo(X, Y + 1);
+      ctx.lineTo(X - 2, Y + 7);
+      ctx.lineTo(X + 4, Y - 1);
+      ctx.lineTo(X, Y - 1);
+      ctx.closePath();
+      ctx.fillStyle = C['--ev-ink'];
+      ctx.fill();
+      const queued = sim.buses.filter((b) => b.charge === 'queued').length;
+      ctx.font = `600 11px ${C['--font-label']}`;
+      ctx.textBaseline = 'middle';
+      this.label(`CHARGING HUB · ${sim.chargersInUse}/${sim.cfg.chargers} IN USE${queued ? ` · ${queued} WAITING` : ''}`, X + 14, Y, C['--ink']);
+    }
+
     // selected bus route
     const sel = this.selection;
     if (sel?.kind === 'bus') this.drawRoute(sim.buses[sel.id]);
@@ -614,8 +646,15 @@ export class MapView {
     const ctx = this.ctx;
     const C = this.colors;
     const pose = this.sim.busPose(b);
-    const X = this.sx(pose.x);
-    const Y = this.sy(pose.y);
+    let X = this.sx(pose.x);
+    let Y = this.sy(pose.y);
+    if (b.charge === 'queued' || b.charge === 'charging') {
+      // line up plugged-in and waiting buses below the hub marker
+      const at = this.sim.buses.filter((o) => o.charge === 'queued' || o.charge === 'charging').indexOf(b);
+      X += ((at % 6) - 2.5) * 22;
+      Y += 22 + Math.floor(at / 6) * 16;
+      pose.angle = 0;
+    }
     const L = Math.max(18, 14 * this.scale);
     const W = Math.max(9, 6.5 * this.scale);
     const status = this.sim.status(b);
@@ -626,19 +665,29 @@ export class MapView {
     // body
     ctx.beginPath();
     ctx.roundRect(-L / 2, -W / 2, L, W, 2.5);
-    ctx.fillStyle = status === 'idle' || status === 'offDuty' ? C['--panel'] : C['--danfo'];
+    const ink = b.ev ? C['--ev-ink'] : C['--danfo-ink'];
+    const working = status === 'carrying' || status === 'toPickup';
+    ctx.fillStyle = working ? (b.ev ? C['--ev'] : C['--danfo']) : C['--panel'];
     ctx.fill();
     ctx.lineWidth = 1.5;
-    ctx.strokeStyle = C['--danfo-ink'];
+    ctx.strokeStyle = ink;
     ctx.stroke();
     // load bar: share of seats taken
     const load = b.onboard.length / cap;
     if (load > 0) {
-      ctx.fillStyle = C['--danfo-ink'];
+      ctx.fillStyle = ink;
       ctx.fillRect(-L / 2 + 2, -W / 2 + 2, (L - 4) * Math.min(1, load), W - 4);
     }
+    // battery gauge under electric buses (red when it needs charging)
+    if (b.ev) {
+      const soc = Math.max(0, Math.min(1, b.soc / this.sim.cfg.batteryKWh));
+      ctx.fillStyle = C['--panel'];
+      ctx.fillRect(-L / 2, W / 2 + 1.5, L, 3.5);
+      ctx.fillStyle = b.charge !== 'none' || soc < this.sim.cfg.chargeAtPct ? C['--s8'] : C['--ev'];
+      ctx.fillRect(-L / 2, W / 2 + 1.5, L * soc, 3.5);
+    }
     // windscreen
-    ctx.fillStyle = C['--danfo-ink'];
+    ctx.fillStyle = ink;
     ctx.fillRect(L / 2 - 3, -W / 2 + 1.5, 1.5, W - 3);
     ctx.restore();
     if (this.selection?.kind === 'bus' && this.selection.id === b.id) this.ring(X, Y, L * 0.75);

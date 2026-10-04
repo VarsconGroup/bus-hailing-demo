@@ -68,6 +68,7 @@ export class Dashboard {
   update(sim: Simulation, sel: Selection) {
     const hours = Math.max(1 / 60, sim.hour - sim.cfg.serviceStart);
     const s = summarize(sim.cfg, sim.stats, Math.min(hours, sim.cfg.serviceEnd - sim.cfg.serviceStart));
+    const evs = sim.buses.filter((b) => b.ev).length;
     const tile = (label: string, value: string, sub: string, bad = false) =>
       `<div class="kpi"><span class="kpi-label">${label}</span><span class="kpi-value${bad ? ' bad' : ''}">${value}</span><span class="kpi-sub">${sub}</span></div>`;
     this.kpis.innerHTML = [
@@ -77,8 +78,12 @@ export class Dashboard {
       tile('Ride', isFinite(s.avgRide) ? `${num(s.avgRide)} min` : '–', isFinite(s.avgDetour) ? `${num(s.avgDetour, 2)}× the direct ride` : 'no trips finished yet'),
       tile('Riders per bus', num(s.avgLoad), `when carrying · ${pct(s.occupancy)} of seat-km used`),
       tile('Fleet busy', pct(s.utilisation), `${num(s.ridesPerBusHour)} rides / bus-hour · ${pct(s.emptyKmShare)} empty km`),
-      tile('Profit / hour', naira(s.profitPerHour), `revenue ${naira(s.revenue)} · costs ${naira(s.fuelCost + s.busCost)}`, s.profitPerHour < 0),
+      tile('Profit / hour', naira(s.profitPerHour), `revenue ${naira(s.revenue)} · costs ${naira(s.fuelCost + s.electricityCost + s.busCost)}`, s.profitPerHour < 0),
       tile('Break-even fare', naira(s.breakEvenFare), `cost per ride at this demand`),
+      tile('CO₂ per ride', isFinite(s.co2PerRide) ? `${num(s.co2PerRide, 2)} kg` : '–', `${num(s.co2Kg, 0)} kg today · energy ${naira(s.pickedUp ? (s.fuelCost + s.electricityCost) / s.pickedUp : NaN)}/ride`),
+      evs
+        ? tile('Charging', pct(s.chargingShare), `of bus-hours · ${s.chargeVisits} charges · ${sim.chargersInUse}/${sim.cfg.chargers} chargers busy${s.flatBatteries ? ` · ${s.flatBatteries} ran flat` : ''}`, s.chargingShare > 0.2 || s.flatBatteries > 0)
+        : tile('Fuel', `${num(s.km / 8, 0)} L`, `about 8 km/L · ${naira(s.fuelCost)} today`),
     ].join('');
 
     // outcomes
@@ -115,6 +120,7 @@ export class Dashboard {
         { name: 'Carrying riders', color: '--s1', values: sim.series.map((p) => p.busesCarrying) },
         { name: 'Going to a pickup', color: '--s2', values: sim.series.map((p) => p.busesToPickup) },
         { name: 'Empty / cruising', color: '--s3', values: sim.series.map((p) => p.busesIdle) },
+        ...(sim.buses.some((b) => b.ev) ? [{ name: 'Charging', color: '--s4', values: sim.series.map((p) => p.busesCharging) }] : []),
       ]);
       this.chartWait.setData(xs, [{ name: 'Average wait', color: '--s1', values: sim.series.map((p) => p.avgWait) }]);
     }
@@ -131,7 +137,18 @@ export class Dashboard {
     const now = sim.now;
     if (sel.kind === 'bus') {
       const b = sim.buses[sel.id];
-      const status = { idle: 'Cruising empty', toPickup: 'Going to a pickup', carrying: 'Carrying riders', offDuty: 'Off duty' }[sim.status(b)];
+      const status = {
+        idle: 'Cruising empty',
+        toPickup: 'Going to a pickup',
+        carrying: 'Carrying riders',
+        charging: b.charge === 'charging' ? 'Charging' : b.charge === 'queued' ? 'Waiting for a charger' : 'Heading to charge',
+        offDuty: 'Off duty',
+      }[sim.status(b)];
+      const socPct = b.ev ? b.soc / sim.cfg.batteryKWh : 0;
+      const energyRows = b.ev
+        ? `<dt>Battery</dt><dd><span class="battery" style="--soc:${Math.round(socPct * 100)}%"><i></i></span> ${Math.round(socPct * 100)}% · ${num(b.soc / sim.cfg.evKWhPerKm, 0)} km left</dd>
+           <dt>Energy used</dt><dd>${num(b.kwh)} kWh · charged ${fmtMin(b.chargeSec)}</dd>`
+        : `<dt>Fuel used</dt><dd>${num(b.km / 8)} L</dd>`;
       const travel = sim.travelFn();
       const st = sim.busState(b);
       let t = st.startTime;
@@ -147,17 +164,18 @@ export class Dashboard {
         return w >= 0 && sim.net.ways[w].name ? sim.net.ways[w].name : 'meetup point';
       };
       this.inspector.innerHTML = `
-        <h3>Bus ${b.id + 1} <span class="state-chip">${status}</span></h3>
+        <h3>Bus ${b.id + 1} <span class="state-chip">${b.ev ? 'Electric' : 'Petrol'}</span> <span class="state-chip">${status}</span></h3>
         <div class="seats" aria-label="${b.onboard.length} of ${sim.cfg.seatsPerBus} seats taken">${Array.from({ length: sim.cfg.seatsPerBus }, (_, i) => `<i class="${i < b.onboard.length ? 'taken' : ''}"></i>`).join('')}</div>
         <dl>
           <dt>Seats taken</dt><dd>${b.onboard.length} / ${sim.cfg.seatsPerBus}</dd>
           <dt>Trips completed</dt><dd>${b.trips}</dd>
           <dt>Distance today</dt><dd>${num(b.km)} km (${pct(b.km ? 1 - b.kmLoaded / b.km : 0)} empty)</dd>
           <dt>Busy</dt><dd>${pct(b.serviceSec ? b.busySec / b.serviceSec : 0)} of the time</dd>
+          ${energyRows}
         </dl>
         ${b.stops.length ? `<ol class="stops" aria-label="Planned stops">${b.stops
           .map((s, i) => `<li><span class="stop-n${s.kind === 'dropoff' ? ' drop' : ''}">${i + 1}</span><span>${s.kind === 'pickup' ? 'Pick up' : 'Drop off'} #${s.rider} · ${street(s.node)}</span><span class="muted">${clock(etas[i] / 3600)}</span></li>`)
-          .join('')}</ol>` : `<p class="empty">No bookings — ${sim.cfg.idleBehaviour === 'park' ? 'parked' : 'cruising the corridors'}.</p>`}`;
+          .join('')}</ol>` : `<p class="empty">${b.charge !== 'none' ? 'Not taking bookings until charged.' : `No bookings — ${sim.cfg.idleBehaviour === 'park' ? 'parked' : 'cruising the corridors'}.`}</p>`}`;
       return;
     }
     const r = sim.riders[sel.id];

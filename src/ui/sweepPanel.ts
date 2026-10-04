@@ -19,6 +19,12 @@ const OPTIONS: Option[] = [
   { key: 'maxWalk', from: 200, to: 1000, steps: 9 },
   { key: 'maxWaitMin', from: 5, to: 25, steps: 9 },
   { key: 'fare', from: 200, to: 1500, steps: 8 },
+  { key: 'evShare', from: 0, to: 1, steps: 6 },
+  { key: 'batteryKWh', from: 30, to: 120, steps: 7 },
+  { key: 'chargerKW', from: 11, to: 120, steps: 6 },
+  { key: 'chargers', from: 1, to: 6, steps: 6 },
+  { key: 'electricityPrice', from: 100, to: 400, steps: 7 },
+  { key: 'evBusCostPerHour', from: 1500, to: 6000, steps: 7 },
   { key: 'busCostPerHour', from: 1000, to: 6000, steps: 6 },
   { key: 'trafficLevel', from: 0.3, to: 1.1, steps: 9 },
 ];
@@ -164,8 +170,8 @@ export class SweepPanel {
       c.setOptions({ fmtX: fx, markX: mark });
       c.setData(xs, [{ name: c.el.querySelector('.chart-title')!.textContent!, color: '--s1', values: data[i] }]);
     });
-    (this.els['sweep-table'] as HTMLTableElement).innerHTML = `<thead><tr><th>${s.label}</th><th>Picked up</th><th>Avg wait</th><th>p90 wait</th><th>In reach</th><th>Walk</th><th>Riders/bus</th><th>Profit/h</th><th>Break-even fare</th></tr></thead><tbody>${pts
-      .map((p) => `<tr><th scope="row">${fx(p.value)}</th><td>${Math.round(p.summary.serviceRate * 100)}%</td><td>${p.summary.avgWait.toFixed(1)} min</td><td>${p.summary.p90Wait.toFixed(1)} min</td><td>${Math.round(p.summary.reachRate * 100)}%</td><td>${Math.round(p.summary.avgWalk)} m</td><td>${p.summary.avgLoad.toFixed(1)}</td><td>${naira(p.summary.profitPerHour)}</td><td>${naira(p.summary.breakEvenFare)}</td></tr>`)
+    (this.els['sweep-table'] as HTMLTableElement).innerHTML = `<thead><tr><th>${s.label}</th><th>Picked up</th><th>Avg wait</th><th>p90 wait</th><th>In reach</th><th>Walk</th><th>Riders/bus</th><th>Profit/h</th><th>Break-even fare</th><th>CO₂/ride</th><th>Charging</th></tr></thead><tbody>${pts
+      .map((p) => `<tr><th scope="row">${fx(p.value)}</th><td>${Math.round(p.summary.serviceRate * 100)}%</td><td>${p.summary.avgWait.toFixed(1)} min</td><td>${p.summary.p90Wait.toFixed(1)} min</td><td>${Math.round(p.summary.reachRate * 100)}%</td><td>${Math.round(p.summary.avgWalk)} m</td><td>${p.summary.avgLoad.toFixed(1)}</td><td>${naira(p.summary.profitPerHour)}</td><td>${naira(p.summary.breakEvenFare)}</td><td>${p.summary.co2PerRide.toFixed(2)} kg</td><td>${Math.round(p.summary.chargingShare * 100)}%</td></tr>`)
       .join('')}</tbody>`;
 
     const tServed = Number((this.els['sweep-target-served'] as HTMLSelectElement).value);

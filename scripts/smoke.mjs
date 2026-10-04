@@ -68,6 +68,7 @@ await page.waitForTimeout(400);
 console.log('inspector:', (await page.locator('.inspector-body').innerText()).split('\n').slice(0, 3).join(' | '));
 
 // Settings: change a live and a restart parameter
+await page.evaluate(() => document.querySelectorAll('details.group').forEach((d) => (d.open = true)));
 await page.locator('#cfg-matchingStrategy').selectOption('pooling');
 await page.locator('#cfg-fleetSize').fill('12');
 await page.locator('#cfg-fleetSize').dispatchEvent('change');

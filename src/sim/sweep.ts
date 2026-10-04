@@ -36,6 +36,8 @@ export function runPoint(raw: RawNetwork, net: Network, cfg: SimConfig, param: k
   const runs: Summary[] = [];
   for (let k = 0; k < seeds; k++) {
     const c = { ...cfg, [param]: value, seed: cfg.seed + k * 101 } as SimConfig;
+    // Sweeping the EV share only makes sense for a mixed fleet (0 = all petrol, 1 = all electric).
+    if (param === 'evShare') c.powertrain = 'mixed';
     const sim = new Simulation(raw, c, net);
     sim.runToEnd();
     runs.push(summarize(sim.cfg, sim.stats, sim.cfg.serviceEnd - sim.cfg.serviceStart));

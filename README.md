@@ -10,6 +10,12 @@ Lekki–Epe Expressway to the south, the toll gate curve to Kusenla Road).
 
 ## What you can do
 
+- **Choose the fleet type**: electric only (the default, as planned for the pilot), petrol/diesel
+  only, or a mixed fleet with a chosen electric share. Electric buses drain their battery as
+  they drive. Below a set level they stop taking bookings, finish their trips and drive to the
+  charging hub. There they queue for a free charger and charge back up. You set battery size,
+  energy use, charger power and count, charge thresholds, electricity price and EV bus-hour
+  cost. Move the hub with the **Charging hub** map tool.
 - **Change the variables**: fleet size, seats, bookings per hour and the rush-hour profile,
   share of trips to the edges (toll gate, link bridge, expressway junctions), no-shows,
   meetup spacing, max walk, dispatch strategy, traffic, rider patience, detour limits,
@@ -68,6 +74,13 @@ There is no demand data yet. Every demand number is a planning assumption.
 - **Walking**: 1.2 m/s, with walking distance taken as 1.3 × the straight line.
 - **Costs**: fuel ₦150/km (a Hiace at ~8 km/L and ₦1,200/L) and ₦2,500 per bus-hour for
   driver, lease and maintenance. Change both to your real quotes.
+- **Electric buses**: 60 kWh battery, 0.25 kWh/km, 2 × 40 kW chargers at one hub. Buses charge
+  from 20% to 90% and start the day at 90–100%. Electricity costs ₦225/kWh and an EV bus-hour
+  ₦3,000. Electricity is charged on the energy driven, assuming overnight top-ups are paid at
+  the same price. Charging is linear, with no taper above 80%.
+- **CO₂**: petrol buses emit 0.29 kg/km (8 km/L × 2.3 kg/L). Electric buses are counted at
+  0.43 kg/kWh of Nigerian grid power with 90% charger efficiency. Generator charging would be
+  higher.
 
 ## Refreshing the map data
 

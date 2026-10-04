@@ -5,15 +5,28 @@ export type MatchingStrategy = 'nearest' | 'pooling';
 export type MeetupStrategy = 'closest' | 'fastest';
 export type IdleBehaviour = 'patrol' | 'park' | 'rebalance';
 export type FareModel = 'flat' | 'distance' | 'zone';
+export type Powertrain = 'fuel' | 'ev' | 'mixed';
 
 export interface SimConfig {
   seed: number;
+  /** Charging hub position (metres, map coordinates); snapped to the nearest meetup point. */
+  hubX: number;
+  hubY: number;
   serviceStart: number; // hour of day
   serviceEnd: number;
   // Fleet
   fleetSize: number;
   seatsPerBus: number;
   idleBehaviour: IdleBehaviour;
+  // Vehicles & energy
+  powertrain: Powertrain;
+  evShare: number; // 0..1 share of the fleet that is electric when mixed
+  batteryKWh: number;
+  evKWhPerKm: number;
+  chargerKW: number;
+  chargers: number; // charging points at the hub
+  chargeAtPct: number; // 0..1 battery level that sends a bus to charge
+  chargeToPct: number; // 0..1 level it charges up to
   // Demand
   bookingsPerHour: number;
   useDemandProfile: boolean;
@@ -42,16 +55,28 @@ export interface SimConfig {
   fareInside: number; // zone
   fareEdge: number;
   fuelCostPerKm: number;
-  busCostPerHour: number; // driver + vehicle lease/maintenance per bus-hour
+  busCostPerHour: number; // fuel bus: driver + vehicle lease/maintenance per bus-hour
+  electricityPrice: number; // ₦ per kWh delivered by the charger
+  evBusCostPerHour: number; // EV: driver + vehicle lease/maintenance per bus-hour
 }
 
 export const DEFAULT_CONFIG: SimConfig = {
   seed: 42,
+  hubX: 0,
+  hubY: 0,
   serviceStart: 6,
   serviceEnd: 22,
   fleetSize: 10,
   seatsPerBus: 14,
   idleBehaviour: 'patrol',
+  powertrain: 'ev',
+  evShare: 0.5,
+  batteryKWh: 60,
+  evKWhPerKm: 0.25,
+  chargerKW: 40,
+  chargers: 2,
+  chargeAtPct: 0.2,
+  chargeToPct: 0.9,
   bookingsPerHour: 100,
   useDemandProfile: true,
   edgeTripShare: 0.45,
@@ -77,6 +102,8 @@ export const DEFAULT_CONFIG: SimConfig = {
   fareEdge: 600,
   fuelCostPerKm: 150,
   busCostPerHour: 2500,
+  electricityPrice: 225,
+  evBusCostPerHour: 3000,
 };
 
 export interface NumberSpec {
@@ -114,6 +141,16 @@ export type ParamSpec = NumberSpec | SelectSpec | BoolSpec;
 
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 const naira = (v: number) => `₦${v.toLocaleString('en-NG')}`;
+const hasEv = (c: SimConfig) => c.powertrain !== 'fuel';
+const hasFuel = (c: SimConfig) => c.powertrain !== 'ev';
+
+/** Number of electric buses in a fleet of `fleetSize`. */
+export function evCount(c: Pick<SimConfig, 'powertrain' | 'evShare' | 'fleetSize'>): number {
+  if (c.powertrain === 'ev') return c.fleetSize;
+  if (c.powertrain === 'fuel') return 0;
+  return Math.min(c.fleetSize, Math.max(0, Math.round(c.fleetSize * c.evShare)));
+}
+
 export const clock = (h: number) => {
   const m = Math.round(h * 60) % 1440;
   return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
@@ -133,6 +170,26 @@ export const PARAM_GROUPS: { title: string; params: ParamSpec[] }[] = [
           { value: 'park', label: 'Park and wait where they are' },
         ],
       },
+    ],
+  },
+  {
+    title: 'Vehicles & charging',
+    params: [
+      {
+        key: 'powertrain', label: 'Fleet type', kind: 'select', help: 'Electric buses must leave service to recharge at the charging hub (move it with the Charging hub map tool).', restart: true,
+        options: [
+          { value: 'ev', label: 'Electric only' },
+          { value: 'fuel', label: 'Petrol/diesel only' },
+          { value: 'mixed', label: 'Mixed fleet' },
+        ],
+      },
+      { key: 'evShare', label: 'Share of buses that are electric', kind: 'number', min: 0, max: 1, step: 0.1, format: pct, help: 'Rounded to whole buses.', restart: true, showIf: (c) => c.powertrain === 'mixed' },
+      { key: 'batteryKWh', label: 'Battery size', kind: 'number', min: 20, max: 150, step: 5, unit: 'kWh', help: 'Usable battery. Electric minibuses typically carry 50–90 kWh.', showIf: hasEv },
+      { key: 'evKWhPerKm', label: 'Energy use', kind: 'number', min: 0.12, max: 0.5, step: 0.01, unit: 'kWh/km', help: 'Stop-start driving with air conditioning: about 0.2–0.3 kWh/km for a minibus.', showIf: hasEv },
+      { key: 'chargerKW', label: 'Charger power', kind: 'number', min: 7, max: 150, step: 1, unit: 'kW', help: '7–22 kW AC is slow; 40–60 kW DC tops up a minibus in about an hour.', showIf: hasEv },
+      { key: 'chargers', label: 'Chargers at the hub', kind: 'number', min: 1, max: 20, step: 1, help: 'Buses queue when all chargers are busy.', showIf: hasEv },
+      { key: 'chargeAtPct', label: 'Go to charge below', kind: 'number', min: 0.05, max: 0.6, step: 0.05, format: pct, help: 'Battery level at which a bus stops taking bookings, finishes its trips and heads to the hub.', showIf: hasEv },
+      { key: 'chargeToPct', label: 'Charge up to', kind: 'number', min: 0.5, max: 1, step: 0.05, format: pct, help: 'Charging slows above ~80% in real batteries; stopping earlier gets buses back sooner.', showIf: hasEv },
     ],
   },
   {
@@ -195,8 +252,10 @@ export const PARAM_GROUPS: { title: string; params: ParamSpec[] }[] = [
       { key: 'farePerKm', label: 'Per km', kind: 'number', min: 0, max: 1000, step: 10, format: naira, help: 'Per km of the direct bus route between the meetup points.', showIf: (c) => c.fareModel === 'distance' },
       { key: 'fareInside', label: 'Inside Phase 1', kind: 'number', min: 100, max: 3000, step: 50, format: naira, help: 'Trips that start and end inside the estate.', showIf: (c) => c.fareModel === 'zone' },
       { key: 'fareEdge', label: 'To/from the edges', kind: 'number', min: 100, max: 3000, step: 50, format: naira, help: 'Trips to or from the toll gate, link bridge or expressway junctions.', showIf: (c) => c.fareModel === 'zone' },
-      { key: 'fuelCostPerKm', label: 'Fuel cost per km', kind: 'number', min: 20, max: 500, step: 10, format: naira, help: 'A Hiace does ~8 km/L; at ₦1,200/L that is ₦150/km.' },
-      { key: 'busCostPerHour', label: 'Driver + vehicle per bus-hour', kind: 'number', min: 0, max: 10000, step: 250, format: naira, help: 'Driver pay, lease, maintenance, insurance per bus per hour on the road.' },
+      { key: 'electricityPrice', label: 'Electricity per kWh', kind: 'number', min: 50, max: 600, step: 5, format: naira, help: 'Grid Band A is about ₦210/kWh; add the charger operator margin, or more if charging from a generator or solar lease.', showIf: hasEv },
+      { key: 'evBusCostPerHour', label: 'EV: driver + vehicle per bus-hour', kind: 'number', min: 0, max: 10000, step: 250, format: naira, help: 'Driver pay, lease, maintenance, insurance per electric bus per hour on the road. EVs cost more to lease, less to maintain.', showIf: hasEv },
+      { key: 'fuelCostPerKm', label: 'Fuel cost per km', kind: 'number', min: 20, max: 500, step: 10, format: naira, help: 'A Hiace does ~8 km/L; at ₦1,200/L that is ₦150/km.', showIf: hasFuel },
+      { key: 'busCostPerHour', label: 'Fuel bus: driver + vehicle per bus-hour', kind: 'number', min: 0, max: 10000, step: 250, format: naira, help: 'Driver pay, lease, maintenance, insurance per petrol/diesel bus per hour on the road.', showIf: hasFuel },
     ],
   },
   {

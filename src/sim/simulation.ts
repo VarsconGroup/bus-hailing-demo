@@ -1,6 +1,6 @@
 // The simulated day. Pure TypeScript (no DOM) so it runs in the page, in a Web Worker for
 // scenario sweeps, and in tests.
-import { DEFAULT_CONFIG, type SimConfig } from './config';
+import { DEFAULT_CONFIG, evCount, type SimConfig } from './config';
 import { Demand, peakness, type Place } from './demand';
 import { assign, type BusState, type DispatchParams, type RiderInfo, type Stop } from './dispatch';
 import { fareFor } from './economics';
@@ -36,7 +36,9 @@ export interface Rider {
   reason: string;
 }
 
-export type BusStatus = 'idle' | 'toPickup' | 'carrying' | 'offDuty';
+export type BusStatus = 'idle' | 'toPickup' | 'carrying' | 'charging' | 'offDuty';
+/** EV charging cycle: needs charge → drives to hub → queues → charges → back in service. */
+export type ChargeState = 'none' | 'needed' | 'queued' | 'charging';
 
 export interface Bus {
   id: number;
@@ -54,6 +56,13 @@ export interface Bus {
   fresh: boolean; // just arrived at the node (pull-over time not yet charged)
   idleTarget: number;
   idleChecked: number;
+  // electric buses
+  ev: boolean;
+  soc: number; // kWh in the battery
+  charge: ChargeState;
+  queuedAt: number;
+  kwh: number; // energy used today
+  chargeSec: number;
   // odometers & timers
   km: number;
   kmLoaded: number;
@@ -65,7 +74,7 @@ export interface Bus {
 
 export interface LogEvent {
   t: number;
-  kind: 'book' | 'assign' | 'pickup' | 'dropoff' | 'noshow' | 'cancel' | 'reject' | 'network' | 'info';
+  kind: 'book' | 'assign' | 'pickup' | 'dropoff' | 'noshow' | 'cancel' | 'reject' | 'network' | 'info' | 'charge';
   text: string;
   rider?: number;
   bus?: number;
@@ -78,6 +87,7 @@ export interface Sample {
   busesCarrying: number;
   busesToPickup: number;
   busesIdle: number;
+  busesCharging: number;
   avgWait: number; // minutes, pickups in the last 30 min
   bookings: number; // cumulative
   served: number; // cumulative
@@ -103,6 +113,16 @@ export interface Stats {
   seatKm: number;
   busHours: number;
   busyHours: number;
+  // energy
+  fuelKm: number;
+  evKm: number;
+  kwh: number; // consumed by electric buses
+  busHoursFuel: number;
+  busHoursEv: number;
+  chargeHours: number; // bus-hours spent plugged in
+  queueHours: number; // bus-hours waiting for a free charger
+  chargeVisits: number;
+  flatBatteries: number;
 }
 
 const RETRY_SEC = 30;
@@ -125,6 +145,8 @@ export class Simulation {
   private nextArrival = Infinity;
   private nextSample = 0;
   private recent: { t: number; x: number; y: number }[] = [];
+  /** Node where electric buses charge. */
+  hubNode = -1;
   onEvent?: (e: LogEvent) => void;
 
   constructor(raw: RawNetwork, cfg: Partial<SimConfig> = {}, net?: Network) {
@@ -139,10 +161,18 @@ export class Simulation {
     this.opsRng = new Rng(this.cfg.seed * 104729 + 2);
     this.stats = emptyStats();
     const starts = [...this.net.meetups];
+    // Own stream for batteries, so switching fuel ↔ electric doesn't change anything else.
+    const batteryRng = new Rng(this.cfg.seed * 31 + 3);
+    const evs = evCount(this.cfg);
     for (let i = 0; i < this.cfg.fleetSize; i++) {
       const node = starts.length ? starts.splice(this.opsRng.int(starts.length), 1)[0] : 0;
-      this.buses.push(newBus(i, node));
+      const b = newBus(i, node);
+      // Electric buses come out of the overnight charge at 90–100%.
+      b.ev = i < evs;
+      b.soc = b.ev ? this.cfg.batteryKWh * batteryRng.range(0.9, 1) : 0;
+      this.buses.push(b);
     }
+    this.setHub(this.cfg.hubX, this.cfg.hubY);
     this.scheduleArrival();
   }
 
@@ -225,6 +255,7 @@ export class Simulation {
     }
 
     const traffic = this.traffic();
+    this.allocateChargers();
     for (const b of this.buses) this.moveBus(b, dt, traffic);
 
     if (this.now >= this.nextSample) {
@@ -341,7 +372,8 @@ export class Simulation {
   }
 
   private tryAssign(r: Rider) {
-    const buses = this.buses.filter((b) => this.inService || b.stops.length > 0).map((b) => this.busState(b));
+    // Buses on their way to charge (or charging) take no new bookings.
+    const buses = this.buses.filter((b) => (this.inService || b.stops.length > 0) && b.charge === 'none').map((b) => this.busState(b));
     const pickups = this.net.meetupsNear(r.from.x, r.from.y, this.cfg.maxWalk);
     const drop = this.net.meetupsNear(r.to.x, r.to.y, Math.max(this.cfg.maxWalk, 5000), 1)[0];
     const a = drop && pickups.length
@@ -458,18 +490,77 @@ export class Simulation {
     }
   }
 
+  // ---------------------------------------------------------------- charging
+
+  /** Move the charging hub to the meetup point nearest (x, y). */
+  setHub(x: number, y: number) {
+    this.cfg = { ...this.cfg, hubX: x, hubY: y };
+    const prev = this.hubNode;
+    this.hubNode = this.net.meetupsNear(x, y, 1e6, 1)[0]?.node ?? this.net.meetups[0] ?? 0;
+    if (prev >= 0 && prev !== this.hubNode)
+      for (const b of this.buses)
+        if (b.charge === 'queued' || b.charge === 'charging') b.charge = 'needed'; // drive to the new hub
+  }
+
+  get chargersInUse() {
+    let n = 0;
+    for (const b of this.buses) if (b.charge === 'charging') n++;
+    return n;
+  }
+
+  private allocateChargers() {
+    let free = this.cfg.chargers - this.chargersInUse;
+    if (free <= 0) return;
+    const queue = this.buses.filter((b) => b.charge === 'queued').sort((a, b) => a.queuedAt - b.queuedAt);
+    for (const b of queue) {
+      if (free-- <= 0) break;
+      b.charge = 'charging';
+      this.stats.chargeVisits++;
+    }
+  }
+
+  private chargeStep(b: Bus, dt: number) {
+    if (b.charge === 'queued') {
+      this.stats.queueHours += dt / 3600;
+      return;
+    }
+    const target = this.cfg.chargeToPct * this.cfg.batteryKWh;
+    b.soc = Math.min(target, b.soc + (this.cfg.chargerKW * dt) / 3600);
+    b.chargeSec += dt;
+    this.stats.chargeHours += dt / 3600;
+    if (b.soc >= target - 1e-9) {
+      b.charge = 'none';
+      b.idleTarget = -1;
+      this.emit({ kind: 'charge', text: `Bus ${b.id + 1} charged to ${Math.round(this.cfg.chargeToPct * 100)}% — back in service`, bus: b.id });
+    }
+  }
+
   // ---------------------------------------------------------------- buses
 
   status(b: Bus): BusStatus {
     if (b.onboard.length) return 'carrying';
     if (b.stops.length) return 'toPickup';
+    if (b.charge !== 'none') return 'charging';
     return this.inService ? 'idle' : 'offDuty';
   }
 
   private moveBus(b: Bus, dt: number, traffic: number) {
-    if (this.inService || b.stops.length || b.onboard.length) {
+    if (this.inService || b.stops.length || b.onboard.length || b.charge !== 'none') {
       b.serviceSec += dt;
       this.stats.busHours += dt / 3600;
+      if (b.ev) this.stats.busHoursEv += dt / 3600;
+      else this.stats.busHoursFuel += dt / 3600;
+    }
+    if (b.ev) {
+      if (b.charge === 'queued' || b.charge === 'charging') {
+        this.chargeStep(b, dt);
+        return;
+      }
+      if (b.charge === 'none' && b.soc < this.cfg.chargeAtPct * this.cfg.batteryKWh) {
+        b.charge = 'needed';
+        b.idleTarget = -1;
+        this.emit({ kind: 'charge', text: `Bus ${b.id + 1} battery at ${Math.round((b.soc / this.cfg.batteryKWh) * 100)}% — finishing trips, then charging`, bus: b.id });
+      }
     }
     if (b.onboard.length || b.stops.length) {
       b.busySec += dt;
@@ -481,6 +572,12 @@ export class Simulation {
     while (budget > 1e-9 && guard-- > 0) {
       if (b.edge < 0) {
         if (this.handleStops(b)) return;
+        if (b.charge === 'needed' && !b.stops.length && !b.onboard.length && b.node === this.hubNode) {
+          b.charge = 'queued';
+          b.queuedAt = this.now;
+          b.path = [];
+          return;
+        }
         const target = this.targetFor(b);
         if (target < 0 || target === b.node) return;
         if (!b.path.length || b.pathTarget !== target || b.pathVersion !== this.net.version) {
@@ -525,6 +622,18 @@ export class Simulation {
     const km = m / 1000;
     b.km += km;
     this.stats.km += km;
+    if (b.ev) {
+      const e = km * this.cfg.evKWhPerKm;
+      b.soc -= e;
+      b.kwh += e;
+      this.stats.kwh += e;
+      this.stats.evKm += km;
+      if (b.soc <= 0 && b.soc + e > 0) {
+        this.stats.flatBatteries++;
+        this.emit({ kind: 'charge', text: `Bus ${b.id + 1} ran its battery flat — raise the charging threshold or add chargers`, bus: b.id });
+      }
+      b.soc = Math.max(0, b.soc);
+    } else this.stats.fuelKm += km;
     this.stats.seatKm += km * this.cfg.seatsPerBus;
     if (b.onboard.length) {
       b.kmLoaded += km;
@@ -601,6 +710,7 @@ export class Simulation {
 
   private targetFor(b: Bus): number {
     if (b.stops.length) return b.stops[0].node;
+    if (b.charge === 'needed') return this.hubNode;
     if (!this.inService) return b.node;
     switch (this.cfg.idleBehaviour) {
       case 'park':
@@ -697,7 +807,7 @@ export class Simulation {
       if (s === 'searching' || s === 'assigned') waiting++;
       else if (s === 'onboard') riding++;
     }
-    const st = { carrying: 0, toPickup: 0, idle: 0, offDuty: 0 };
+    const st = { carrying: 0, toPickup: 0, idle: 0, charging: 0, offDuty: 0 };
     for (const b of this.buses) st[this.status(b)]++;
     const since = this.now - 1800;
     let sw = 0;
@@ -717,6 +827,7 @@ export class Simulation {
       busesCarrying: st.carrying,
       busesToPickup: st.toPickup,
       busesIdle: st.idle + st.offDuty,
+      busesCharging: st.charging,
       avgWait: n ? sw / n / 60 : NaN,
       bookings: this.stats.requested,
       served: this.stats.served,
@@ -734,6 +845,7 @@ function newBus(id: number, node: number): Bus {
   return {
     id, node, edge: -1, to: -1, pos: 0, path: [], pathTarget: -1, pathVersion: -1, stops: [], onboard: [],
     dwellUntil: 0, graceUntil: -1, fresh: false, idleTarget: -1, idleChecked: 0,
+    ev: false, soc: 0, charge: 'none', queuedAt: 0, kwh: 0, chargeSec: 0,
     km: 0, kmLoaded: 0, paxKm: 0, serviceSec: 0, busySec: 0, trips: 0,
   };
 }
@@ -743,6 +855,7 @@ function emptyStats(): Stats {
     requested: 0, pickedUp: 0, served: 0, cancelled: 0, rejectedWalk: 0, rejectedNoBus: 0, noShows: 0,
     waits: [], walks: [], rides: [], detours: [], lateness: [],
     revenue: 0, km: 0, kmLoaded: 0, paxKm: 0, seatKm: 0, busHours: 0, busyHours: 0,
+    fuelKm: 0, evKm: 0, kwh: 0, busHoursFuel: 0, busHoursEv: 0, chargeHours: 0, queueHours: 0, chargeVisits: 0, flatBatteries: 0,
   };
 }
 

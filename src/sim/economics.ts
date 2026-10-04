@@ -1,5 +1,11 @@
 // Fares, costs and the summary numbers shown in the dashboard and scenario sweeps.
 import type { SimConfig } from './config';
+import type { Stats } from './simulation';
+
+// Emission factors (assumptions): petrol minibus ~8 km/L × 2.3 kg CO2/L; Nigerian grid
+// ~0.43 kg CO2/kWh, with ~90% charger efficiency.
+export const FUEL_CO2_PER_KM = 0.29;
+export const GRID_CO2_PER_KWH = 0.43 / 0.9;
 
 export function fareFor(cfg: SimConfig, trip: { directDist: number; edgeTrip: boolean }): number {
   switch (cfg.fareModel) {
@@ -40,7 +46,18 @@ export interface Summary {
   ridesPerBusHour: number;
   revenue: number;
   fuelCost: number;
+  electricityCost: number;
   busCost: number;
+  /** kg of CO2 from driving (tailpipe for fuel buses, grid for electric) */
+  co2Kg: number;
+  co2PerRide: number; // kg
+  kwh: number;
+  chargeHours: number;
+  queueHours: number;
+  chargeVisits: number;
+  flatBatteries: number;
+  /** share of bus-hours lost to charging and queueing */
+  chargingShare: number;
   profit: number;
   profitPerHour: number;
   breakEvenFare: number;
@@ -55,16 +72,15 @@ const pct = (a: number[], p: number) => {
 
 export function summarize(
   cfg: SimConfig,
-  st: {
-    requested: number; pickedUp: number; served: number; cancelled: number; rejectedWalk: number; rejectedNoBus: number; noShows: number;
-    waits: number[]; walks: number[]; rides: number[]; detours: number[]; lateness: number[];
-    revenue: number; km: number; kmLoaded: number; paxKm: number; seatKm: number; busHours: number; busyHours: number;
-  },
+  st: Stats,
   hours: number,
 ): Summary {
-  const fuelCost = st.km * cfg.fuelCostPerKm;
-  const busCost = st.busHours * cfg.busCostPerHour;
-  const profit = st.revenue - fuelCost - busCost;
+  const fuelCost = st.fuelKm * cfg.fuelCostPerKm;
+  const electricityCost = st.kwh * cfg.electricityPrice;
+  const busCost = st.busHoursFuel * cfg.busCostPerHour + st.busHoursEv * cfg.evBusCostPerHour;
+  const costs = fuelCost + electricityCost + busCost;
+  const profit = st.revenue - costs;
+  const co2Kg = st.fuelKm * FUEL_CO2_PER_KM + st.kwh * GRID_CO2_PER_KWH;
   const eligible = st.requested - st.noShows - st.rejectedWalk;
   return {
     hours,
@@ -92,9 +108,18 @@ export function summarize(
     ridesPerBusHour: st.busHours > 0 ? st.pickedUp / st.busHours : 0,
     revenue: st.revenue,
     fuelCost,
+    electricityCost,
     busCost,
+    co2Kg,
+    co2PerRide: st.pickedUp ? co2Kg / st.pickedUp : NaN,
+    kwh: st.kwh,
+    chargeHours: st.chargeHours,
+    queueHours: st.queueHours,
+    chargeVisits: st.chargeVisits,
+    flatBatteries: st.flatBatteries,
+    chargingShare: st.busHours > 0 ? (st.chargeHours + st.queueHours) / st.busHours : 0,
     profit,
     profitPerHour: hours > 0 ? profit / hours : 0,
-    breakEvenFare: st.pickedUp ? (fuelCost + busCost) / st.pickedUp : NaN,
+    breakEvenFare: st.pickedUp ? costs / st.pickedUp : NaN,
   };
 }
