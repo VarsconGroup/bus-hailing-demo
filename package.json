@@ -11,9 +11,12 @@
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "import-osm": "node scripts/import-osm.mjs"
+    "fetch-osm": "node scripts/fetch-osm.mjs",
+    "build-network": "node scripts/build-network.mjs",
+    "smoke": "node scripts/smoke.mjs"
   },
   "devDependencies": {
+    "playwright": "^1.63.0",
     "typescript": "^5.9.3",
     "vite": "^6.4.3",
     "vite-plugin-singlefile": "^2.3.3",
