@@ -339,11 +339,12 @@ export class MapView {
         ctx.lineWidth = Math.max(1.5, wpx * 0.35);
         ctx.stroke();
       }
-      if (w.jam < 1) {
+      if (w.jam < 1 || w.divert < 1) {
+        // jams solid; the open side of a half-closed road (diverted traffic) lighter
         wayPath(w.id);
         ctx.strokeStyle = C['--s2'];
         ctx.lineWidth = wpx + 3;
-        ctx.globalAlpha = 0.75;
+        ctx.globalAlpha = w.jam < 1 ? 0.75 : 0.4;
         ctx.stroke();
         ctx.globalAlpha = 1;
       }

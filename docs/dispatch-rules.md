@@ -78,6 +78,9 @@ passes. After that the booking is rejected as *no bus in time*.
   drops the stop and carries on.
 - **Late buses**: a rider whose bus hasn't arrived 5 minutes after their latest pickup
   cancels.
+- **Closures on dual carriageways**: OpenStreetMap maps each direction as its own street.
+  Closing one side leaves the other open; it carries both directions at half speed, so
+  buses keep using it unless a detour is faster. Banning buses applies to both sides.
 - **Network changes** (a street closed, buses banned): riders whose meetup point vanished are
   re-matched from scratch. Riders on board are re-routed to the nearest valid drop-off
   point.

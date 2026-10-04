@@ -447,19 +447,26 @@ export class Simulation {
 
   // ---------------------------------------------------------------- network edits
 
+  // Bus permissions apply to the street in both directions (see Network.carriageways).
+  // Closures and jams apply to the clicked carriageway only; closing one side of a dual
+  // carriageway slows the other side, which now carries both directions.
+
   toggleBusStreet(wayId: number) {
-    this.net.toggleBus(wayId);
     const w = this.net.ways[wayId];
+    this.net.setWays(this.net.carriageways(wayId), { bus: !w.bus });
     this.networkChanged(`${w.name || 'Street'} ${w.bus ? 'opened to' : 'closed to'} buses`);
   }
   toggleClosed(wayId: number) {
-    this.net.toggleClosed(wayId);
     const w = this.net.ways[wayId];
-    this.networkChanged(`${w.name || 'Street'} ${w.closed ? 'closed' : 'reopened'}`);
+    this.net.setWays([wayId], { closed: !w.closed });
+    const diverted = this.net.carriageways(wayId).length > 1;
+    this.networkChanged(
+      `${w.name || 'Street'} ${w.closed ? (diverted ? 'closed on one side — traffic shares the other side at half speed' : 'closed') : 'reopened'}`,
+    );
   }
   toggleJam(wayId: number) {
     const w = this.net.ways[wayId];
-    this.net.setJam(wayId, w.jam < 1 ? 1 : 0.2);
+    this.net.setWays([wayId], { jam: w.jam < 1 ? 1 : 0.2 });
     this.networkChanged(`${w.name || 'Street'}: ${w.jam < 1 ? 'traffic jam' : 'jam cleared'}`);
   }
 

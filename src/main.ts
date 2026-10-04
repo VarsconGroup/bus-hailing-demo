@@ -77,7 +77,7 @@ app.innerHTML = `
             <svg viewBox="0 0 26 14"><circle cx="13" cy="7" r="4" fill="var(--s8)"/></svg><span>Rider still looking for a bus</span>
             <svg viewBox="0 0 26 14"><path d="M1 7h24" stroke="var(--road-edge)" stroke-width="7"/><path d="M1 7h24" stroke="var(--road)" stroke-width="5"/><path d="M1 7h24" stroke="var(--bus-road)" stroke-width="2"/><circle cx="13" cy="7" r="3.5" fill="var(--panel)" stroke="var(--bus-road)" stroke-width="1.5"/></svg><span>Bus street with meetup point</span>
             <svg viewBox="0 0 26 14"><path d="M1 7h24" stroke="var(--s8)" stroke-width="3" stroke-dasharray="5 4"/></svg><span>Closed road</span>
-            <svg viewBox="0 0 26 14"><path d="M1 7h24" stroke="var(--s2)" stroke-width="6"/></svg><span>Traffic jam</span>
+            <svg viewBox="0 0 26 14"><path d="M1 7h24" stroke="var(--s2)" stroke-width="6"/></svg><span>Traffic jam (light: busy with traffic diverted from a closed side)</span>
             <svg viewBox="0 0 26 14"><path d="M13 1l6 6-6 6-6-6z" fill="var(--ink)"/></svg><span>Edge gate (toll gate, bridge, junctions)</span>
           </div>
         </details>
@@ -213,7 +213,15 @@ map.onStreet = (tool, way) => {
   else if (tool === 'jam') sim.toggleJam(way);
   const w = net.ways[way];
   const what = tool === 'bus' ? (w.bus ? 'now a bus street' : 'no longer a bus street') : tool === 'close' ? (w.closed ? 'closed' : 'reopened') : w.jam < 1 ? 'jammed' : 'clear again';
-  showToast(`${escapeHtml(w.name || 'Unnamed street')} is ${what}`, tool === 'bus' ? `${net.meetups.length} meetup points on ${net.stats().busKm.toFixed(1)} km of bus streets.` : 'Buses re-route at their next junction.');
+  const otherSide = tool === 'close' && w.closed && net.carriageways(way).length > 1;
+  showToast(
+    `${escapeHtml(w.name || 'Unnamed street')} is ${otherSide ? 'closed on this side' : what}`,
+    tool === 'bus'
+      ? `${net.meetups.length} meetup points on ${net.stats().busKm.toFixed(1)} km of bus streets.`
+      : otherSide
+        ? 'Traffic from this side now shares the other carriageway, which slows to half speed (shown in light orange). Buses keep using it and re-route where a detour is faster.'
+        : 'Buses re-route at their next junction.',
+  );
   computeCoverage();
 };
 map.onHub = (x, y) => {

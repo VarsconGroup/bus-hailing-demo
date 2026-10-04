@@ -37,7 +37,9 @@ export const CLASS_SPEED: Record<RoadClass, number> = {
 
 /** Buses can still crawl along a non-bus street (e.g. one that was banned while a bus was on it), but it costs this much more. */
 const NON_BUS_PENALTY = 60;
-const MAX_SEGMENT = 40; // metres; bus streets are subdivided so meetups can be placed finely
+const MAX_SEGMENT = 40;
+/** Speed factor on the open side of a dual carriageway while the other side is closed. */
+export const DIVERTED_SPEED = 0.5; // metres; bus streets are subdivided so meetups can be placed finely
 export const WALK_DETOUR = 1.3; // walking distance ≈ straight line × this
 
 export interface Way {
@@ -46,7 +48,9 @@ export interface Way {
   cls: RoadClass;
   bus: boolean;
   closed: boolean;
-  jam: number; // speed multiplier, 1 = normal, 0.25 = heavy jam
+  jam: number; // speed multiplier, 1 = normal, 0.2 = heavy jam
+  /** speed multiplier from traffic diverted off a closed opposite carriageway (1 = none) */
+  divert: number;
   nodes: number[]; // after subdivision
   length: number;
 }
@@ -120,7 +124,7 @@ export class Network {
         prev = n;
       }
     }
-    this.ways.push({ id, name: w.name, cls: w.cls, bus: w.bus, closed: false, jam: 1, nodes, length });
+    this.ways.push({ id, name: w.name, cls: w.cls, bus: w.bus, closed: false, jam: 1, divert: 1, nodes, length });
   }
 
   private addEdge(a: number, b: number, way: number) {
@@ -151,7 +155,7 @@ export class Network {
   /** Bus speed on an edge in m/s for a global traffic factor. */
   speed(e: number, traffic: number) {
     const w = this.ways[this.eway[e]];
-    const s = CLASS_SPEED[w.cls] * w.jam * traffic;
+    const s = CLASS_SPEED[w.cls] * w.jam * w.divert * traffic;
     return this.isBusEdge(e) ? s : s / 4;
   }
 
@@ -161,24 +165,67 @@ export class Network {
     this.rebuild();
   }
 
-  toggleBus(wayId: number) {
+  /**
+   * The street at `wayId` across both directions. OpenStreetMap stores each side of a dual
+   * carriageway (e.g. Admiralty Way) as its own way a few metres apart. Used to ban buses from
+   * a street in both directions, and to divert traffic onto the open side when one side closes.
+   * Returns `wayId` plus every same-named way running alongside it (most of its nodes within
+   * 45 m of the clicked way, and at least two of them, so pieces that merely continue the
+   * street end to end are not included).
+   */
+  carriageways(wayId: number): number[] {
     const w = this.ways[wayId];
-    w.bus = !w.bus;
-    this.rebuild();
+    const out = [wayId];
+    if (!w.name) return out;
+    const near = (n: number, of: Way) => {
+      for (let i = 1; i < of.nodes.length; i++) {
+        const a = of.nodes[i - 1];
+        const b = of.nodes[i];
+        if (distToSeg(this.x[n], this.y[n], this.x[a], this.y[a], this.x[b], this.y[b]) < 45) return true;
+      }
+      return false;
+    };
+    for (const o of this.ways) {
+      if (o.id === wayId || o.name !== w.name) continue;
+      const hits = o.nodes.filter((n) => near(n, w)).length;
+      const back = w.nodes.filter((n) => near(n, o)).length;
+      if ((hits >= 2 && hits / o.nodes.length >= 0.6) || (back >= 2 && back / w.nodes.length >= 0.6)) out.push(o.id);
+    }
+    return out;
+  }
+
+  /** Change several streets at once and rebuild routes (and meetup points if needed). */
+  setWays(ids: number[], patch: Partial<Pick<Way, 'bus' | 'closed' | 'jam'>>) {
+    for (const id of ids) Object.assign(this.ways[id], patch);
+    this.rebuild(patch.bus !== undefined || patch.closed !== undefined);
+  }
+
+  toggleBus(wayId: number) {
+    this.setWays([wayId], { bus: !this.ways[wayId].bus });
   }
   toggleClosed(wayId: number) {
-    const w = this.ways[wayId];
-    w.closed = !w.closed;
-    this.rebuild();
+    this.setWays([wayId], { closed: !this.ways[wayId].closed });
   }
   setJam(wayId: number, factor: number) {
-    this.ways[wayId].jam = factor;
-    this.rebuild(false);
+    this.setWays([wayId], { jam: factor });
+  }
+
+  /**
+   * When one side of a dual carriageway is closed, its traffic shares the other side:
+   * the open side runs at DIVERTED_SPEED. Recomputed from scratch so reopening restores it.
+   */
+  private applyDiversions() {
+    for (const w of this.ways) w.divert = 1;
+    for (const w of this.ways) {
+      if (!w.closed) continue;
+      for (const id of this.carriageways(w.id)) if (id !== w.id && !this.ways[id].closed) this.ways[id].divert = DIVERTED_SPEED;
+    }
   }
 
   /** Recompute edge costs, bus components and (optionally) meetup points; invalidates routes. */
   rebuild(meetups = true) {
     this.version++;
+    this.applyDiversions();
     this.trees.clear();
     const E = this.ea.length;
     this.edgeTime = new Float64Array(E);
@@ -186,7 +233,7 @@ export class Network {
       const w = this.ways[this.eway[e]];
       if (w.closed) this.edgeTime[e] = Infinity;
       else {
-        const t = this.elen[e] / (CLASS_SPEED[w.cls] * w.jam);
+        const t = this.elen[e] / (CLASS_SPEED[w.cls] * w.jam * w.divert);
         this.edgeTime[e] = w.bus ? t : t * NON_BUS_PENALTY;
       }
     }
