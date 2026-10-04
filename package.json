@@ -1,0 +1,22 @@
+{
+  "name": "bus-hailing-demo",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Interactive simulation of an on-demand bus-hailing pilot in Lekki Phase 1, Lagos",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "build:single": "tsc --noEmit && vite build --mode single",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "import-osm": "node scripts/import-osm.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vite": "^6.4.3",
+    "vite-plugin-singlefile": "^2.3.3",
+    "vitest": "^3.2.7"
+  }
+}
