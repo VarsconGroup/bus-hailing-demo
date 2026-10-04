@@ -1,0 +1,31 @@
+name: Fetch OpenStreetMap data
+
+# Downloads raw Lekki Phase 1 street data from Overpass and commits it to data/osm-raw.json.
+# Runs on demand, or automatically when the fetch script changes.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - scripts/fetch-osm.mjs
+      - .github/workflows/fetch-osm.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/fetch-osm.mjs
+      - name: Commit data if it changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/osm-raw.json
+          if git diff --cached --quiet; then echo "No change"; exit 0; fi
+          git commit -m "Update OpenStreetMap data for Lekki Phase 1"
+          git push
